@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env*
+!.env.example
+!.env.simulated.example
+!.env.live.example
+.pytest_cache/
+*.egg-info/
+logs/
+state/
+reports/
