@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from okx_quant.timeframe import bar_seconds
+
 
 def _load_env_files() -> None:
     cwd = Path.cwd()
@@ -224,6 +226,10 @@ class Settings:
             raise ValueError(f"Missing OKX credentials: {joined}")
 
     def validate(self) -> None:
+        try:
+            factor_bar_seconds = bar_seconds(self.factor_bar)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         if self.fast_window >= self.slow_window:
             raise ValueError("OKX_FAST_WINDOW must be smaller than OKX_SLOW_WINDOW")
         if self.candles_limit < self.slow_window + 2:
@@ -305,8 +311,15 @@ class Settings:
             raise ValueError("OKX_FACTOR_DYNAMIC_TOP_N_REQUIRED_SIGNALS must be between 1 and 4")
         if not (Decimal("0") <= self.factor_dynamic_top_n_breadth_threshold <= Decimal("1")):
             raise ValueError("OKX_FACTOR_DYNAMIC_TOP_N_BREADTH_THRESHOLD must be in [0, 1]")
-        if self.factor_rebalance_mode not in {"daily", "weekly", "monthly"}:
-            raise ValueError("OKX_FACTOR_REBALANCE_MODE must be daily, weekly, or monthly")
+        if self.factor_rebalance_mode not in {"interval", "daily", "weekly", "monthly"}:
+            raise ValueError("OKX_FACTOR_REBALANCE_MODE must be interval, daily, weekly, or monthly")
+        if self.factor_rebalance_interval_sec <= 0:
+            raise ValueError("OKX_FACTOR_REBALANCE_INTERVAL_SEC must be positive")
+        if self.factor_rebalance_mode == "interval":
+            if self.factor_rebalance_interval_sec < factor_bar_seconds:
+                raise ValueError("OKX_FACTOR_REBALANCE_INTERVAL_SEC must be at least one factor bar")
+            if self.factor_rebalance_interval_sec % factor_bar_seconds != 0:
+                raise ValueError("OKX_FACTOR_REBALANCE_INTERVAL_SEC must align with the chosen factor bar")
         if self.factor_rebalance_weekday < 0 or self.factor_rebalance_weekday > 6:
             raise ValueError("OKX_FACTOR_REBALANCE_WEEKDAY must be between 0 and 6")
         min_history_required = max(

@@ -5,6 +5,7 @@ import argparse
 from okx_quant.backtest import FactorBacktester
 from okx_quant.bot import TradingBot
 from okx_quant.config import Settings
+from okx_quant.dashboard import FactorDashboardServer
 from okx_quant.factor_bot import FactorPortfolioBot
 from okx_quant.guardian import FactorGuardian
 from okx_quant.logging_utils import configure_logging
@@ -25,6 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     guard = subparsers.add_parser("factors-guard", help="Run the simulated guardian loop with daily equity/holding summaries")
     guard.add_argument("--once", action="store_true", help="Run one guardian tick and exit")
     guard.add_argument("--max-loops", type=int, default=None, help="Run the guardian loop for a fixed number of ticks")
+    dashboard = subparsers.add_parser("factors-dashboard", help="Serve a local dashboard for guardian curves and portfolio state")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8787)
     backtest = subparsers.add_parser("factors-backtest", help="Run factor backtests for the requested year windows")
     backtest.add_argument("--years", type=int, nargs="*", default=None, help="Backtest windows in years, e.g. --years 1 2 3")
     walk_forward = subparsers.add_parser("factors-walk-forward", help="Run rolling train/validation walk-forward analysis")
@@ -48,6 +52,7 @@ def main() -> None:
     factor_bot = FactorPortfolioBot(settings)
     backtester = FactorBacktester(settings)
     guardian = FactorGuardian(settings)
+    dashboard = FactorDashboardServer(settings)
     walk_forward = FactorWalkForwardAnalyzer(settings)
 
     if args.command == "signal":
@@ -171,6 +176,10 @@ def main() -> None:
             )
             return
         guardian.serve(max_iterations=args.max_loops)
+        return
+
+    if args.command == "factors-dashboard":
+        dashboard.serve(host=args.host, port=args.port)
         return
 
     if args.command == "factors-backtest":
