@@ -11,6 +11,7 @@ from typing import Any
 
 from okx_quant.backtest import BacktestReport, EquityPoint, FactorBacktester
 from okx_quant.config import Settings
+from okx_quant.timeframe import bar_seconds, bars_for_days, bars_per_year
 
 
 @dataclass(frozen=True)
@@ -231,11 +232,16 @@ class FactorWalkForwardAnalyzer:
             (Decimal("0.22"), Decimal("0.35")),
             (Decimal("0.30"), Decimal("0.15")),
         )
+        rebalance_modes = ("weekly", "monthly")
+        rebalance_interval_sec = self.settings.factor_rebalance_interval_sec
+        if bar_seconds(self.settings.factor_bar) < 24 * 60 * 60:
+            rebalance_modes = ("interval",)
+            rebalance_interval_sec = bar_seconds(self.settings.factor_bar)
         dynamic_variants = self._dynamic_top_n_variants(profile)
         market_state_variants = self._market_state_variants(profile)
         if profile == "quick":
-            return self._build_grid(
-                modes=("weekly", "monthly"),
+            grid = self._build_grid(
+                modes=rebalance_modes,
                 top_ns=(1, 2),
                 turnovers=(Decimal("0.35"), Decimal("0.50")),
                 target_vols=(Decimal("0.45"), Decimal("0.55")),
@@ -245,9 +251,10 @@ class FactorWalkForwardAnalyzer:
                 dynamic_variants=dynamic_variants,
                 market_state_variants=market_state_variants,
             )
+            return [candidate | {"factor_rebalance_interval_sec": rebalance_interval_sec} for candidate in grid]
         if profile == "full":
-            return self._build_grid(
-                modes=("weekly", "monthly"),
+            grid = self._build_grid(
+                modes=rebalance_modes,
                 top_ns=(1, 2),
                 turnovers=(Decimal("0.35"), Decimal("0.50")),
                 target_vols=(Decimal("0.35"), Decimal("0.45"), Decimal("0.55")),
@@ -260,8 +267,9 @@ class FactorWalkForwardAnalyzer:
                 dynamic_variants=dynamic_variants,
                 market_state_variants=market_state_variants,
             )
-        return self._build_grid(
-            modes=("weekly", "monthly"),
+            return [candidate | {"factor_rebalance_interval_sec": rebalance_interval_sec} for candidate in grid]
+        grid = self._build_grid(
+            modes=rebalance_modes,
             top_ns=(1, 2),
             turnovers=(Decimal("0.35"), Decimal("0.50")),
             target_vols=(Decimal("0.45"), Decimal("0.55")),
@@ -274,6 +282,7 @@ class FactorWalkForwardAnalyzer:
             dynamic_variants=dynamic_variants,
             market_state_variants=market_state_variants,
         )
+        return [candidate | {"factor_rebalance_interval_sec": rebalance_interval_sec} for candidate in grid]
 
     def _curve_metrics(self, equity_curve: list[EquityPoint]) -> CurveMetrics:
         if len(equity_curve) < 2:
@@ -294,8 +303,9 @@ class FactorWalkForwardAnalyzer:
                 returns.append(current / previous - 1.0)
 
         returns_stdev = pstdev(returns) if len(returns) > 1 else 0.0
-        annualized_volatility = returns_stdev * (365.0**0.5) if returns_stdev > 0 else 0.0
-        sharpe_ratio = (mean(returns) / returns_stdev * (365.0**0.5)) if returns_stdev > 0 else 0.0
+        annualization = bars_per_year(self.settings.factor_bar) ** 0.5
+        annualized_volatility = returns_stdev * annualization if returns_stdev > 0 else 0.0
+        sharpe_ratio = (mean(returns) / returns_stdev * annualization) if returns_stdev > 0 else 0.0
         total_return = float(equity_curve[-1].equity / equity_curve[0].equity - Decimal("1"))
         return CurveMetrics(
             total_return=total_return,
@@ -373,7 +383,10 @@ class FactorWalkForwardAnalyzer:
         base_backtester = FactorBacktester(self.settings)
         universe, history = base_backtester.load_history_for_years([lookback_years])
         all_ts = sorted({candle.ts for candles in history.values() for candle in candles if candle.confirmed})
-        if len(all_ts) < self.settings.factor_min_history + train_days + test_days:
+        train_bars = bars_for_days(self.settings.factor_bar, train_days)
+        test_bars = bars_for_days(self.settings.factor_bar, test_days)
+        step_bars = bars_for_days(self.settings.factor_bar, step_days)
+        if len(all_ts) < self.settings.factor_min_history + train_bars + test_bars:
             raise RuntimeError("Not enough history for walk-forward analysis")
 
         splits: list[WalkForwardSplit] = []
@@ -393,11 +406,11 @@ class FactorWalkForwardAnalyzer:
             len(grid),
         )
 
-        while start_index + train_days + test_days <= len(all_ts):
+        while start_index + train_bars + test_bars <= len(all_ts):
             train_start = all_ts[start_index]
-            train_end = all_ts[start_index + train_days - 1]
-            test_start = all_ts[start_index + train_days]
-            test_end = all_ts[start_index + train_days + test_days - 1]
+            train_end = all_ts[start_index + train_bars - 1]
+            test_start = all_ts[start_index + train_bars]
+            test_end = all_ts[start_index + train_bars + test_bars - 1]
             self.logger.info(
                 "Walk-forward split=%s train=%s..%s test=%s..%s",
                 split_index,
@@ -474,7 +487,7 @@ class FactorWalkForwardAnalyzer:
                 )
             )
             split_index += 1
-            start_index += step_days
+            start_index += step_bars
 
         oos_return, oos_max_drawdown = self._stitch_equity(self.settings.factor_backtest_initial_capital, test_curves)
         output_dir = Path(self.settings.factor_walk_forward_output_dir)

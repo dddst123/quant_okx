@@ -79,8 +79,10 @@ make sim-once
 make sim-run
 make sim-guard-once
 make sim-guard
+make sim-dashboard
 make live-dry-run
 make live-once
+make live-dashboard
 make wf-quick
 make backtest
 ```
@@ -92,8 +94,10 @@ make backtest
 - `make sim-run`：持续运行模拟盘组合。
 - `make sim-guard-once`：执行一次 guardian tick。
 - `make sim-guard`：启动长期运行的 guardian 守护进程。
+- `make sim-dashboard`：在 `http://127.0.0.1:8787` 启动本地网页看板。
 - `make live-dry-run`：读取 `/Users/mac/project/quant_okx/.env.live`，但强制 `OKX_DRY_RUN=true`。
 - `make live-once`：按当前本地实盘配置执行一次。
+- `make live-dashboard`：按实盘 profile 的日志/报告路径启动本地网页看板。
 - `make wf-quick`：执行较轻量的 walk-forward 烟雾测试。
 - `make backtest`：执行 1/2/3 年回测批处理。
 
@@ -106,11 +110,28 @@ python -m okx_quant.main factors-once
 python -m okx_quant.main factors-run
 python -m okx_quant.main factors-guard --once
 python -m okx_quant.main factors-guard --max-loops 24
+python -m okx_quant.main factors-dashboard --host 127.0.0.1 --port 8787
 python -m okx_quant.main factors-backtest --years 1 2 3
 python -m okx_quant.main factors-walk-forward --lookback-years 4 --train-days 365 --test-days 90 --step-days 90
 python -m okx_quant.main factors-walk-forward --lookback-years 2 --train-days 240 --test-days 60 --step-days 120 --search-profile quick
 python -m okx_quant.main factors-risk-reset
 ```
+
+## 本地网页看板
+
+这个 dashboard 只监听本机地址，会直接读取 guardian 的本地事件日志并展示：
+
+- guardian tick 形成的实时权益 / NAV / 回撤曲线
+- 最新持仓、候选 picks、计划订单和 market-state 原因
+- `/Users/mac/project/quant_okx/reports/backtests` 里最新一次回测摘要
+
+推荐用法：
+
+1. 一个终端运行 guardian：`make sim-guard`
+2. 另一个终端运行 dashboard：`make sim-dashboard`
+3. 浏览器打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)
+
+如果页面还没有实时数据，通常表示 guardian 还没往本地日志写入新的 tick。
 
 ## 建议的验证路径
 

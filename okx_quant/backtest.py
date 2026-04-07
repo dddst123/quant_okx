@@ -17,6 +17,7 @@ from okx_quant.market_state import MarketStateEngine
 from okx_quant.models import Candle, SpotTicker
 from okx_quant.portfolio_risk import PortfolioRiskEngine, PortfolioRiskState
 from okx_quant.strategy import FactorCandidate, VolumeTrendFactorStrategy
+from okx_quant.timeframe import bar_timedelta, bars_per_year
 from okx_quant.universe import discover_factor_universe
 
 
@@ -92,7 +93,7 @@ class FactorBacktester:
         )
 
     def _fetch_history(self, inst_ids: list[str], years: int) -> dict[str, list[Candle]]:
-        bars_needed = self.settings.factor_min_history + years * 370 + 10
+        bars_needed = self.settings.factor_min_history + math.ceil(years * bars_per_year(self.settings.factor_bar) * (370.0 / 365.0)) + 10
         history: dict[str, list[Candle]] = {}
         for index, inst_id in enumerate(inst_ids):
             history[inst_id] = self.client.get_history_candles_paginated(inst_id, self.settings.factor_bar, bars_needed)
@@ -184,6 +185,8 @@ class FactorBacktester:
         if last_rebalance_ts is None:
             return True
         mode = self.settings.factor_rebalance_mode
+        if mode == "interval":
+            return (current_ts - last_rebalance_ts).total_seconds() >= self.settings.factor_rebalance_interval_sec
         if mode == "daily":
             return last_rebalance_ts.date() != current_ts.date()
         if mode == "weekly":
@@ -239,7 +242,7 @@ class FactorBacktester:
         calendar = [
             ts
             for ts in all_ts
-            if start_ts - timedelta(days=self.settings.factor_min_history + 5) <= ts <= end_ts
+            if start_ts - bar_timedelta(self.settings.factor_bar, self.settings.factor_min_history + 5) <= ts <= end_ts
         ]
         if len(calendar) < self.settings.factor_min_history + 2:
             raise RuntimeError("Not enough historical bars for backtest")
@@ -472,8 +475,9 @@ class FactorBacktester:
             if previous > 0:
                 returns.append(current / previous - 1.0)
         returns_stdev = pstdev(returns) if len(returns) > 1 else 0.0
-        annualized_volatility = returns_stdev * math.sqrt(365) if returns_stdev > 0 else 0.0
-        sharpe_ratio = (mean(returns) / returns_stdev * math.sqrt(365)) if returns_stdev > 0 else 0.0
+        annualization = math.sqrt(bars_per_year(self.settings.factor_bar))
+        annualized_volatility = returns_stdev * annualization if returns_stdev > 0 else 0.0
+        sharpe_ratio = (mean(returns) / returns_stdev * annualization) if returns_stdev > 0 else 0.0
         ending_equity = equity_curve[-1].equity
         total_return = float(ending_equity / self.settings.factor_backtest_initial_capital - Decimal("1"))
         elapsed_days = max((equity_curve[-1].ts - equity_curve[0].ts).days, 1)

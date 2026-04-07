@@ -8,6 +8,7 @@ from statistics import fmean, pstdev
 from okx_quant.config import Settings
 from okx_quant.market_state import MarketStateSnapshot
 from okx_quant.models import Candle
+from okx_quant.timeframe import bars_per_year
 
 
 @dataclass(frozen=True)
@@ -254,8 +255,8 @@ class VolumeTrendFactorStrategy:
         if self.settings.factor_target_annual_vol <= 0 or not selected:
             return 1.0
 
-        daily_target = float(self.settings.factor_target_annual_vol) / sqrt(365.0)
-        if daily_target <= 0:
+        per_bar_target = float(self.settings.factor_target_annual_vol) / sqrt(bars_per_year(self.settings.factor_bar))
+        if per_bar_target <= 0:
             return 1.0
 
         window = self.settings.factor_volatility_lookback
@@ -277,7 +278,7 @@ class VolumeTrendFactorStrategy:
                 portfolio_variance += weights[i] * weights[j] * covariance
 
         daily_vol = sqrt(max(portfolio_variance, 1e-10))
-        exposure = daily_target / daily_vol
+        exposure = per_bar_target / daily_vol
         exposure = max(float(self.settings.factor_min_gross_exposure), exposure)
         exposure = min(float(self.settings.factor_max_gross_exposure), exposure)
         return exposure

@@ -37,7 +37,6 @@ def discover_factor_universe(
         if ticker.inst_id in allowed_inst_ids
         and ticker.inst_id.endswith(suffix)
         and ticker.last >= settings.factor_min_last_price
-        and ticker.quote_volume_24h >= settings.factor_min_24h_quote_volume
         and ticker.inst_id.split("-", 1)[0] not in settings.factor_excluded_bases
     ]
     candidates.sort(key=lambda item: item.quote_volume_24h, reverse=True)

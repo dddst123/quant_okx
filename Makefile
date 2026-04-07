@@ -2,7 +2,7 @@ PYTHON ?= python3
 SIM_ENV ?= .env.simulated
 LIVE_ENV ?= .env.live
 
-.PHONY: help sim-market-state sim-once sim-run sim-guard sim-guard-once live-dry-run live-once wf-quick backtest check-sim-env check-live-env
+.PHONY: help sim-market-state sim-once sim-run sim-guard sim-guard-once sim-dashboard live-dry-run live-once live-dashboard wf-quick backtest check-sim-env check-live-env
 
 help:
 	@printf '%s\n' \
@@ -11,8 +11,10 @@ help:
 		'make sim-run        # run the simulated continuous portfolio loop' \
 		'make sim-guard      # run the simulated guardian daemon' \
 		'make sim-guard-once # run one simulated guardian tick' \
+		'make sim-dashboard  # serve the local simulated dashboard on 127.0.0.1:8787' \
 		'make live-dry-run   # run one live-env cycle with OKX_DRY_RUN=true' \
 		'make live-once      # run one live-env cycle (uses current .env.live values)' \
+		'make live-dashboard # serve the local live dashboard on 127.0.0.1:8787' \
 		'make wf-quick       # quick walk-forward smoke test' \
 		'make backtest       # 1/2/3 year backtest'
 
@@ -44,6 +46,9 @@ sim-run: check-sim-env
 sim-guard: check-sim-env
 	OKX_ENV_FILE=$(SIM_ENV) $(PYTHON) -m okx_quant.main factors-guard
 
+sim-dashboard:
+	OKX_ENV_FILE=$(SIM_ENV) $(PYTHON) -m okx_quant.main factors-dashboard
+
 sim-guard-once: check-sim-env
 	OKX_ENV_FILE=$(SIM_ENV) $(PYTHON) -m okx_quant.main factors-guard --once
 
@@ -52,6 +57,9 @@ live-dry-run: check-live-env
 
 live-once: check-live-env
 	OKX_ENV_FILE=$(LIVE_ENV) $(PYTHON) -m okx_quant.main factors-once
+
+live-dashboard:
+	OKX_ENV_FILE=$(LIVE_ENV) $(PYTHON) -m okx_quant.main factors-dashboard
 
 wf-quick:
 	$(PYTHON) -m okx_quant.main factors-walk-forward --lookback-years 2 --train-days 240 --test-days 60 --step-days 120 --search-profile quick

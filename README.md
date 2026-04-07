@@ -79,8 +79,10 @@ make sim-once
 make sim-run
 make sim-guard-once
 make sim-guard
+make sim-dashboard
 make live-dry-run
 make live-once
+make live-dashboard
 make wf-quick
 make backtest
 ```
@@ -92,8 +94,10 @@ What they do:
 - `make sim-run`: run the continuous simulated portfolio loop.
 - `make sim-guard-once`: run one guardian tick.
 - `make sim-guard`: run the long-lived guardian daemon.
+- `make sim-dashboard`: serve the local dashboard on `http://127.0.0.1:8787`.
 - `make live-dry-run`: use `/Users/mac/project/quant_okx/.env.live` but force `OKX_DRY_RUN=true`.
 - `make live-once`: run one live-profile cycle using the current local live settings.
+- `make live-dashboard`: serve the local dashboard for the live-profile log/output paths.
 - `make wf-quick`: run a smaller walk-forward smoke test.
 - `make backtest`: run the 1/2/3 year backtest batch.
 
@@ -106,11 +110,28 @@ python -m okx_quant.main factors-once
 python -m okx_quant.main factors-run
 python -m okx_quant.main factors-guard --once
 python -m okx_quant.main factors-guard --max-loops 24
+python -m okx_quant.main factors-dashboard --host 127.0.0.1 --port 8787
 python -m okx_quant.main factors-backtest --years 1 2 3
 python -m okx_quant.main factors-walk-forward --lookback-years 4 --train-days 365 --test-days 90 --step-days 90
 python -m okx_quant.main factors-walk-forward --lookback-years 2 --train-days 240 --test-days 60 --step-days 120 --search-profile quick
 python -m okx_quant.main factors-risk-reset
 ```
+
+## Local dashboard
+
+The dashboard serves a local-only page that reads guardian event logs and shows:
+
+- realtime equity / NAV / drawdown curves from guardian ticks
+- current holdings, picks, planned orders, and market-state reason
+- the latest backtest summary found in `/Users/mac/project/quant_okx/reports/backtests`
+
+Typical workflow:
+
+1. Run the guardian in one terminal: `make sim-guard`
+2. Run the dashboard in another terminal: `make sim-dashboard`
+3. Open [http://127.0.0.1:8787](http://127.0.0.1:8787)
+
+If the page shows no live data yet, the guardian has not written fresh ticks to the local log.
 
 ## Suggested validation path
 

@@ -14,6 +14,7 @@ from okx_quant.market_state import MarketStateEngine, MarketStateSnapshot
 from okx_quant.models import InstrumentRules, SpotTicker
 from okx_quant.portfolio_risk import PortfolioRiskEngine, PortfolioStateStore
 from okx_quant.strategy import FactorCandidate, VolumeTrendFactorStrategy
+from okx_quant.timeframe import bar_seconds
 from okx_quant.universe import discover_factor_universe
 
 T = TypeVar("T")
@@ -167,6 +168,8 @@ class FactorPortfolioBot:
             return True
         last = datetime.fromisoformat(state.last_rebalance_at)
         mode = self.settings.factor_rebalance_mode
+        if mode == "interval":
+            return (now - last).total_seconds() >= self.settings.factor_rebalance_interval_sec
         if mode == "daily":
             return last.date() != now.date()
         if mode == "weekly":
@@ -424,6 +427,9 @@ class FactorPortfolioBot:
         )
 
     def serve_forever(self) -> None:
+        sleep_seconds = self.settings.factor_rebalance_interval_sec
+        if self.settings.factor_rebalance_mode != "interval":
+            sleep_seconds = min(self.settings.factor_rebalance_interval_sec, bar_seconds(self.settings.factor_bar))
         while True:
             try:
                 snapshot = self.run_once()
@@ -444,7 +450,7 @@ class FactorPortfolioBot:
                 self.logger.exception("Factor trading loop failed")
                 if state.consecutive_errors == 1 or state.consecutive_errors % self.settings.alert_error_every_n == 0:
                     self.alerts.send("Factor Bot Error", f"consecutive_errors={state.consecutive_errors} error={exc}")
-            time.sleep(self.settings.factor_rebalance_interval_sec)
+            time.sleep(sleep_seconds)
 
     def reset_risk_state(self) -> None:
         self.state_store.reset()
