@@ -1,6 +1,6 @@
 # OKX Quant MVP
 
-Default docs are in English. Optional Chinese version: [README.zh-CN.md](README.zh-CN.md)
+Optional Chinese version: [README.zh-CN.md](README.zh-CN.md)
 
 A practical starting point for building and validating OKX spot automation. The repository includes a simple single-instrument bot, a multi-asset factor portfolio engine, backtesting and walk-forward tooling, market-state monitoring, and production-style operational safeguards.
 
