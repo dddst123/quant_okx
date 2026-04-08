@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from okx_quant.backtest import FactorBacktester
 from okx_quant.config import Settings
 from okx_quant.models import Candle, SpotTicker
-from okx_quant.portfolio_risk import PortfolioRiskEngine, PortfolioRiskState, PortfolioStateStore, PositionState
+from okx_quant.portfolio_risk import (
+    PortfolioRiskEngine,
+    PortfolioRiskState,
+    PortfolioStateStore,
+    PositionState,
+)
 
 
 class FakeBacktestClient:
@@ -43,7 +48,7 @@ class PortfolioRiskEngineTest(unittest.TestCase):
         engine = PortfolioRiskEngine(settings)
         state = PortfolioRiskState(
             equity_peak=Decimal("1000"),
-            positions={"BTC-USDT": PositionState(entry_price=Decimal("100"), high_water_price=Decimal("130"))},
+            positions={"BTC-USDT": PositionState(cost_basis=Decimal("100"), high_water_price=Decimal("130"))},
         )
         decisions = engine.stop_decisions(state, {"BTC-USDT": Decimal("1")}, {"BTC-USDT": Decimal("85")})
         self.assertEqual(len(decisions), 1)
@@ -57,7 +62,7 @@ class PortfolioRiskEngineTest(unittest.TestCase):
             store = PortfolioStateStore(f"{tmpdir}/state.json")
             state = PortfolioRiskState(
                 equity_peak=Decimal("123"),
-                positions={"ETH-USDT": PositionState(entry_price=Decimal("10"), high_water_price=Decimal("12"))},
+                positions={"ETH-USDT": PositionState(cost_basis=Decimal("10"), high_water_price=Decimal("12"))},
             )
             store.save(state)
             loaded = store.load()

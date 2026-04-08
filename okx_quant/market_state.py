@@ -209,7 +209,7 @@ class MarketStateEngine:
                 entries_allowed=False,
                 reduce_only=True,
                 reason="insufficient benchmark history",
-                notes=public_state.notes if public_state is not None else tuple(),
+                notes=public_state.notes if public_state is not None else (),
             )
 
         benchmark_closes = self._close_series(benchmark)

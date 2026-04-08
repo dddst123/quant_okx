@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import unittest
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import unittest
 
 from okx_quant.config import Settings
 from okx_quant.market_state import MarketStateEngine, PublicMarketStateSnapshot
@@ -73,7 +73,7 @@ class MarketStateEngineTest(unittest.TestCase):
             funding_rate=0.0001,
             open_interest_usd=Decimal("1000000000"),
             ts=benchmark[-1].ts,
-            notes=tuple(),
+            notes=(),
         )
         snapshot = engine.snapshot(market_data, benchmark, public_state=public_state)
         self.assertTrue(snapshot.entries_allowed)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from decimal import Decimal
 import unittest
+from decimal import Decimal
 
 from okx_quant.config import Settings
 from okx_quant.models import AccountSnapshot, InstrumentRules, Signal, SignalAction

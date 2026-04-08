@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -64,7 +65,7 @@ def _env_int_list(name: str, default: str) -> list[int]:
 def _env_decimal_pairs(name: str, default: str) -> tuple[tuple[Decimal, Decimal], ...]:
     raw = os.getenv(name, default).strip()
     if not raw:
-        return tuple()
+        return ()
     pairs: list[tuple[Decimal, Decimal]] = []
     for item in raw.split(","):
         left, right = item.split(":", 1)
@@ -225,6 +226,20 @@ class Settings:
             joined = ", ".join(missing)
             raise ValueError(f"Missing OKX credentials: {joined}")
 
+    def rebalance_due(self, last_rebalance_at: str | None, now: datetime) -> bool:
+        """Check whether a rebalance is due given the configured mode and last timestamp."""
+        if not last_rebalance_at:
+            return True
+        last = datetime.fromisoformat(last_rebalance_at)
+        mode = self.factor_rebalance_mode
+        if mode == "interval":
+            return (now - last).total_seconds() >= self.factor_rebalance_interval_sec
+        if mode == "daily":
+            return last.date() != now.date()
+        if mode == "weekly":
+            return now.weekday() == self.factor_rebalance_weekday and now.isocalendar()[:2] != last.isocalendar()[:2]
+        return (now.year, now.month) != (last.year, last.month)
+
     def validate(self) -> None:
         try:
             factor_bar_seconds = bar_seconds(self.factor_bar)
@@ -358,3 +373,12 @@ class Settings:
             raise ValueError("Invalid log rotation settings")
         if self.alert_error_every_n <= 0:
             raise ValueError("OKX_ALERT_ERROR_EVERY_N must be positive")
+
+    def try_validate(self) -> bool:
+        """Like validate() but returns False instead of raising on error.
+        Safe to use when constructing Settings from generated parameter sets."""
+        try:
+            self.validate()
+            return True
+        except ValueError:
+            return False

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 from okx_quant.config import Settings
 

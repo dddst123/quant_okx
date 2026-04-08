@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 
 from okx_quant.config import Settings
 from okx_quant.models import AccountSnapshot, InstrumentRules, OrderIntent, Signal, SignalAction

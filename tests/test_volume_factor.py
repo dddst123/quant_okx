@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import unittest
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import unittest
 
 from okx_quant.config import Settings
 from okx_quant.factor_bot import FactorPortfolioBot
@@ -39,7 +39,7 @@ class VolumeTrendFactorStrategyTest(unittest.TestCase):
             entries_allowed=entries_allowed,
             reduce_only=not entries_allowed,
             reason=reason,
-            notes=tuple(),
+            notes=(),
         )
 
     def _candles(

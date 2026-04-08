@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from okx_quant.config import Settings
 from okx_quant.factor_bot import FactorPortfolioBot

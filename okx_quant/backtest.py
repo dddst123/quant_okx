@@ -184,14 +184,7 @@ class FactorBacktester:
             return False
         if last_rebalance_ts is None:
             return True
-        mode = self.settings.factor_rebalance_mode
-        if mode == "interval":
-            return (current_ts - last_rebalance_ts).total_seconds() >= self.settings.factor_rebalance_interval_sec
-        if mode == "daily":
-            return last_rebalance_ts.date() != current_ts.date()
-        if mode == "weekly":
-            return current_ts.weekday() == self.settings.factor_rebalance_weekday and current_ts.isocalendar()[:2] != last_rebalance_ts.isocalendar()[:2]
-        return (current_ts.year, current_ts.month) != (last_rebalance_ts.year, last_rebalance_ts.month)
+        return self.settings.rebalance_due(last_rebalance_ts.isoformat(), current_ts)
 
     def _write_outputs(self, report: BacktestReport, equity_curve: list[EquityPoint], trades: list[BacktestTrade]) -> None:
         output_dir = Path(self.settings.factor_backtest_output_dir)
@@ -313,7 +306,13 @@ class FactorBacktester:
                     benchmark_trend_on=resume_ready,
                 )
 
-            stop_map = {decision.inst_id: decision for decision in self.risk_engine.stop_decisions(risk_state, holdings, prev_close_prices)}
+            stop_decisions = self.risk_engine.stop_decisions(risk_state, holdings, prev_close_prices)
+            stopped_ids: set[str] = set()
+            for d in stop_decisions:
+                stopped_ids |= d.stopped_position_ids
+            if stopped_ids:
+                risk_state = self.risk_engine.reset_trailing_stops(risk_state, stopped_ids, prev_close_prices)
+            stop_map = {d.inst_id: d for d in stop_decisions}
             stop_loss_events += len(stop_map)
             rebalance_due = self._rebalance_due(last_rebalance_ts, current_ts, current_index)
             market_state = None

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import unittest
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import unittest
 
 from okx_quant.config import Settings
 from okx_quant.models import Candle, SpotTicker

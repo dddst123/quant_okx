@@ -6,12 +6,15 @@ from pathlib import Path
 
 from okx_quant.config import Settings
 
+_configured = False
+
 
 def configure_logging(settings: Settings) -> None:
-    root = logging.getLogger()
-    if getattr(configure_logging, "_configured", False):
+    global _configured
+    if _configured:
         return
 
+    root = logging.getLogger()
     root.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 
@@ -30,4 +33,4 @@ def configure_logging(settings: Settings) -> None:
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 
-    configure_logging._configured = True
+    _configured = True

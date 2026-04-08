@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Callable
 
 from okx_quant.config import Settings
 from okx_quant.models import Candle, SpotTicker

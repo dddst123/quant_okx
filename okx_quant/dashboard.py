@@ -184,7 +184,7 @@ class DashboardDataStore:
                 }
             )
 
-        changes.sort(key=lambda item: (-abs(item["delta_quote"]), -abs(item["delta_size"]), item["inst_id"]))
+        changes.sort(key=lambda item: (-abs(float(item["delta_quote"])), -abs(float(item["delta_size"])), item["inst_id"]))  # type: ignore[arg-type]
         before_total = sum(before_holdings_quote.values())
         after_total = sum(after_holdings_quote.values())
         return {

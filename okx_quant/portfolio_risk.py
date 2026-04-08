@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from okx_quant.config import Settings
 
 
 @dataclass
 class PositionState:
-    entry_price: Decimal
+    cost_basis: Decimal  # volume-weighted average entry price
     high_water_price: Decimal
 
 
@@ -30,6 +32,7 @@ class PortfolioRiskState:
 class StopDecision:
     inst_id: str
     reason: str
+    stopped_position_ids: frozenset[str] = frozenset()
 
 
 class PortfolioStateStore:
@@ -42,7 +45,7 @@ class PortfolioStateStore:
         data = json.loads(self.path.read_text(encoding="utf-8"))
         positions = {
             inst_id: PositionState(
-                entry_price=Decimal(item["entry_price"]),
+                cost_basis=Decimal(item["cost_basis"]),
                 high_water_price=Decimal(item["high_water_price"]),
             )
             for inst_id, item in data.get("positions", {}).items()
@@ -68,13 +71,30 @@ class PortfolioStateStore:
             "consecutive_errors": state.consecutive_errors,
             "positions": {
                 inst_id: {
-                    "entry_price": str(item.entry_price),
+                    "cost_basis": str(item.cost_basis),
                     "high_water_price": str(item.high_water_price),
                 }
                 for inst_id, item in state.positions.items()
             },
         }
-        self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        # Atomic write: write to temp file, then atomically replace.
+        tmp_path: str | None = None
+        try:
+            with NamedTemporaryFile(
+                mode="w",
+                dir=self.path.parent,
+                prefix=".tmp_",
+                suffix=".json",
+                encoding="utf-8",
+                delete=False,
+            ) as tmp:
+                tmp_path = tmp.name
+                json.dump(payload, tmp, indent=2, ensure_ascii=True)
+            Path(tmp_path).replace(self.path)
+        except BaseException:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+            raise
 
     def reset(self) -> PortfolioRiskState:
         state = PortfolioRiskState()
@@ -85,6 +105,7 @@ class PortfolioStateStore:
 class PortfolioRiskEngine:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.logger = logging.getLogger("okx_quant.portfolio_risk")
 
     def exposure_multiplier(self, drawdown: Decimal) -> Decimal:
         multiplier = Decimal("1")
@@ -106,10 +127,13 @@ class PortfolioRiskEngine:
             price = price_map[inst_id]
             existing = state.positions.get(inst_id)
             if existing is None:
-                positions[inst_id] = PositionState(entry_price=price, high_water_price=price)
+                # New position: record current price as both cost basis and high-water mark.
+                positions[inst_id] = PositionState(cost_basis=price, high_water_price=price)
             else:
+                # Existing position: high-water mark advances. Cost basis stays
+                # unchanged (it represents the volume-weighted average entry price).
                 positions[inst_id] = PositionState(
-                    entry_price=existing.entry_price,
+                    cost_basis=existing.cost_basis,
                     high_water_price=max(existing.high_water_price, price),
                 )
         return PortfolioRiskState(
@@ -167,8 +191,8 @@ class PortfolioRiskEngine:
         if self.settings.factor_halt_resume_requires_benchmark_trend and not benchmark_trend_on:
             return state, False
 
-        halted_at = datetime.fromisoformat(state.halted_at)
-        if ts < halted_at + timedelta(days=self.settings.factor_halt_cooldown_days):
+        halted_at_dt = datetime.fromisoformat(state.halted_at)
+        if ts < halted_at_dt + timedelta(days=self.settings.factor_halt_cooldown_days):
             return state, False
 
         resumed = PortfolioRiskState(
@@ -188,7 +212,12 @@ class PortfolioRiskEngine:
         holdings: dict[str, Decimal],
         price_map: dict[str, Decimal],
     ) -> list[StopDecision]:
+        """Return stop decisions. Trailing-stop triggered positions have their
+        high_water_price reset to the current price so subsequent bars use the
+        new baseline."""
         decisions: list[StopDecision] = []
+        stopped_ids: set[str] = set()
+
         for inst_id, size in holdings.items():
             if size <= 0 or inst_id not in price_map:
                 continue
@@ -196,16 +225,29 @@ class PortfolioRiskEngine:
             if position is None:
                 continue
             price = price_map[inst_id]
+
             if self.settings.factor_stop_loss_pct > 0:
-                stop_price = position.entry_price * (Decimal("1") - self.settings.factor_stop_loss_pct)
+                stop_price = position.cost_basis * (Decimal("1") - self.settings.factor_stop_loss_pct)
                 if price <= stop_price:
                     decisions.append(StopDecision(inst_id, f"hard stop hit at {price} <= {stop_price}"))
+                    stopped_ids.add(inst_id)
                     continue
+
             if self.settings.factor_trailing_stop_pct > 0:
                 trailing_price = position.high_water_price * (Decimal("1") - self.settings.factor_trailing_stop_pct)
                 if price <= trailing_price:
                     decisions.append(StopDecision(inst_id, f"trailing stop hit at {price} <= {trailing_price}"))
-        return decisions
+                    stopped_ids.add(inst_id)
+
+        if stopped_ids:
+            self.logger.info("Stop decisions triggered for %s; resetting high_water_price", stopped_ids)
+
+        # Return decisions with the set of stopped position IDs so the caller can
+        # apply resets to the state.
+        return [
+            StopDecision(d.inst_id, d.reason, frozenset(stopped_ids)) if d.inst_id in stopped_ids else d
+            for d in decisions
+        ]
 
     def record_error(self, state: PortfolioRiskState) -> PortfolioRiskState:
         return PortfolioRiskState(
@@ -241,3 +283,31 @@ class PortfolioRiskEngine:
             consecutive_errors=state.consecutive_errors,
             positions=state.positions,
         )
+
+    def reset_trailing_stops(
+        self,
+        state: PortfolioRiskState,
+        stopped_ids: set[str],
+        price_map: dict[str, Decimal],
+    ) -> PortfolioRiskState:
+        """Reset high_water_price to the current price for positions that triggered
+        a trailing stop, so subsequent bars use the fresh baseline."""
+        positions = dict(state.positions)
+        for inst_id in stopped_ids:
+            if inst_id in positions and inst_id in price_map:
+                current_price = price_map[inst_id]
+                positions[inst_id] = PositionState(
+                    cost_basis=positions[inst_id].cost_basis,
+                    high_water_price=current_price,
+                )
+                self.logger.debug("Reset trailing stop for %s: high_water -> %s", inst_id, current_price)
+        return PortfolioRiskState(
+            equity_peak=state.equity_peak,
+            trading_halted=state.trading_halted,
+            halt_reason=state.halt_reason,
+            halted_at=state.halted_at,
+            last_rebalance_at=state.last_rebalance_at,
+            consecutive_errors=state.consecutive_errors,
+            positions=positions,
+        )
+

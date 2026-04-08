@@ -85,21 +85,11 @@ def main() -> None:
             return
         for pick in picks:
             print(
-                (
-                    "inst={inst} weight={weight:.2%} score={score:.4f} "
-                    "mom7={mom7:.2%} mom28={mom28:.2%} mom60={mom60:.2%} "
-                    "fast_gap={fast_gap:.2%} slow_gap={slow_gap:.2%} vol_ratio={vol_ratio:.2f}"
-                ).format(
-                    inst=pick.inst_id,
-                    weight=pick.weight,
-                    score=pick.score,
-                    mom7=pick.momentum_short,
-                    mom28=pick.momentum_medium,
-                    mom60=pick.momentum_long,
-                    fast_gap=pick.fast_gap,
-                    slow_gap=pick.slow_gap,
-                    vol_ratio=pick.volume_ratio,
-                )
+
+                    f"inst={pick.inst_id} weight={pick.weight:.2%} score={pick.score:.4f} "
+                    f"mom7={pick.momentum_short:.2%} mom28={pick.momentum_medium:.2%} mom60={pick.momentum_long:.2%} "
+                    f"fast_gap={pick.fast_gap:.2%} slow_gap={pick.slow_gap:.2%} vol_ratio={pick.volume_ratio:.2f}"
+
             )
         return
 
@@ -129,28 +119,22 @@ def main() -> None:
         return
 
     if args.command == "factors-once":
-        snapshot = factor_bot.run_once()
+        factor_snapshot = factor_bot.run_once()
         print(
             "equity={equity} cash={cash} drawdown={drawdown} halted={halted} picks={picks} planned_orders={orders} executed_orders={executed} market_state={market_state}".format(
-                equity=snapshot.total_equity_quote,
-                cash=snapshot.available_quote,
-                drawdown=snapshot.drawdown,
-                halted=snapshot.trading_halted,
-                picks=",".join(pick.inst_id for pick in snapshot.picks) or "none",
-                orders=len(snapshot.planned_orders),
-                executed=len(snapshot.executed_orders),
-                market_state=snapshot.market_state.reason if snapshot.market_state is not None else "n/a",
+                equity=factor_snapshot.total_equity_quote,
+                cash=factor_snapshot.available_quote,
+                drawdown=factor_snapshot.drawdown,
+                halted=factor_snapshot.trading_halted,
+                picks=",".join(pick.inst_id for pick in factor_snapshot.picks) or "none",
+                orders=len(factor_snapshot.planned_orders),
+                executed=len(factor_snapshot.executed_orders),
+                market_state=factor_snapshot.market_state.reason if factor_snapshot.market_state is not None else "n/a",
             )
         )
-        for order in snapshot.planned_orders:
+        for order in factor_snapshot.planned_orders:
             print(
-                "order side={side} inst={inst} size={size} est_quote={quote} reason={reason}".format(
-                    side=order.side,
-                    inst=order.inst_id,
-                    size=order.size,
-                    quote=order.est_quote_value,
-                    reason=order.reason,
-                )
+                f"order side={order.side} inst={order.inst_id} size={order.size} est_quote={order.est_quote_value} reason={order.reason}"
             )
         return
 
@@ -160,16 +144,16 @@ def main() -> None:
 
     if args.command == "factors-guard":
         if args.once:
-            snapshot = guardian.run_once()
+            guard_snapshot = guardian.run_once()
             print(
                 "ts={ts} equity={equity} cash={cash} drawdown={drawdown} halted={halted} halt_reason={reason} holdings={holdings} event_log={event_log} daily_log={daily_log}".format(
-                    ts=snapshot.ts.isoformat(),
-                    equity=snapshot.total_equity_quote,
-                    cash=snapshot.available_quote,
-                    drawdown=snapshot.drawdown,
-                    halted=snapshot.trading_halted,
-                    reason=snapshot.halt_reason or "none",
-                    holdings=",".join(sorted(snapshot.holdings)) or "flat",
+                    ts=guard_snapshot.ts.isoformat(),
+                    equity=guard_snapshot.total_equity_quote,
+                    cash=guard_snapshot.available_quote,
+                    drawdown=guard_snapshot.drawdown,
+                    halted=guard_snapshot.trading_halted,
+                    reason=guard_snapshot.halt_reason or "none",
+                    holdings=",".join(sorted(guard_snapshot.holdings)) or "flat",
                     event_log=guardian.event_log_path,
                     daily_log=guardian.daily_log_path,
                 )
@@ -208,7 +192,7 @@ def main() -> None:
         return
 
     if args.command == "factors-walk-forward":
-        report = walk_forward.run(
+        wf_report = walk_forward.run(
             lookback_years=args.lookback_years,
             train_days=args.train_days,
             test_days=args.test_days,
@@ -217,24 +201,9 @@ def main() -> None:
             max_configs=args.max_configs,
         )
         print(
-            (
-                "lookback_years={lookback} train_days={train} test_days={test} step_days={step} "
-                "profile={profile} configs={configs} splits={splits} oos_total_return={oos_return:.2%} oos_max_drawdown={oos_mdd:.2%} "
-                "avg_test_return={avg_return:.2%} avg_test_sharpe={avg_sharpe:.2f} report={path}"
-            ).format(
-                lookback=report.lookback_years,
-                train=report.train_days,
-                test=report.test_days,
-                step=report.step_days,
-                profile=report.search_profile,
-                configs=report.config_count,
-                splits=len(report.splits),
-                oos_return=report.out_of_sample_total_return,
-                oos_mdd=report.out_of_sample_max_drawdown,
-                avg_return=report.avg_test_return,
-                avg_sharpe=report.avg_test_sharpe,
-                path=report.report_path,
-            )
+            f"lookback_years={wf_report.lookback_years} train_days={wf_report.train_days} test_days={wf_report.test_days} step_days={wf_report.step_days} "
+            f"profile={wf_report.search_profile} configs={wf_report.config_count} splits={len(wf_report.splits)} oos_total_return={wf_report.out_of_sample_total_return:.2%} oos_max_drawdown={wf_report.out_of_sample_max_drawdown:.2%} "
+            f"avg_test_return={wf_report.avg_test_return:.2%} avg_test_sharpe={wf_report.avg_test_sharpe:.2f} report={wf_report.report_path}"
         )
         return
 

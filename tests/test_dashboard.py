@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from okx_quant.config import Settings
 from okx_quant.dashboard import DashboardDataStore, _dashboard_html

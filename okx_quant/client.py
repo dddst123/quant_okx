@@ -4,13 +4,15 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
-import requests
+import requests  # type: ignore[import-untyped]
 from requests import RequestException
 
 from okx_quant.config import Settings
@@ -35,6 +37,7 @@ class OkxRestClient:
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
         self.timeout = timeout
+        self.logger = logging.getLogger("okx_quant.client")
 
     def _now(self) -> str:
         return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -89,9 +92,12 @@ class OkxRestClient:
                 if data.get("code") != "0":
                     raise OkxApiError(f"OKX API error {data.get('code')}: {data.get('msg')}")
                 return data.get("data", [])
-            except (RequestException, OkxApiError):
+            except (RequestException, OkxApiError) as exc:
+                last_exc = exc
                 if not retryable or attempt == self.settings.http_max_retries - 1:
-                    raise
+                    raise OkxApiError(
+                        f"OKX API request failed after {attempt + 1} attempt(s): {last_exc}"
+                    ) from last_exc
                 time.sleep(self.settings.http_retry_backoff_sec * (2**attempt))
         raise RuntimeError("Unreachable retry loop")
 
@@ -179,6 +185,11 @@ class OkxRestClient:
             try:
                 last_price = Decimal(last)
             except Exception:
+                self.logger.warning(
+                    "Failed to parse last price %r for %s — skipping",
+                    last,
+                    row.get("instId"),
+                )
                 continue
             if last_price <= 0:
                 continue
@@ -205,8 +216,8 @@ class OkxRestClient:
         best_ask = asks[0].price if asks else Decimal("0")
         mid = (best_bid + best_ask) / Decimal("2") if best_bid > 0 and best_ask > 0 else Decimal("0")
         spread_bps = float((best_ask - best_bid) / mid * Decimal("10000")) if mid > 0 else 0.0
-        bid_depth_quote = sum(level.price * level.size for level in bids)
-        ask_depth_quote = sum(level.price * level.size for level in asks)
+        bid_depth_quote = sum((level.price * level.size for level in bids), Decimal("0"))
+        ask_depth_quote = sum((level.price * level.size for level in asks), Decimal("0"))
         return OrderBookSnapshot(
             inst_id=inst_id,
             ts=datetime.fromtimestamp(int(row["ts"]) / 1000, tz=UTC),
@@ -271,9 +282,48 @@ class OkxRestClient:
             "ordType": "market",
             "sz": format(size, "f"),
             "tgtCcy": target_currency,
-            "clOrdId": f"bot-{int(datetime.now(UTC).timestamp())}",
+            # OKX requires a client order ID with a conservative alphanumeric format.
+            "clOrdId": f"bot{int(datetime.now(UTC).timestamp() * 1000)}{uuid4().hex[:8]}",
         }
         rows = self._request("POST", "/api/v5/trade/order", payload=payload, auth=True)
         if not rows:
             raise OkxApiError("OKX returned no order payload")
         return rows[0]
+
+    def get_order(self, inst_id: str, cl_ord_id: str) -> dict[str, Any] | None:
+        """Fetch order details by client order ID. Returns None if the order is not found."""
+        rows = self._request(
+            "GET",
+            "/api/v5/trade/order",
+            params={"instId": inst_id, "clOrdId": cl_ord_id},
+            auth=True,
+        )
+        if not rows:
+            return None
+        return rows[0]
+
+    def wait_for_fill(
+        self,
+        inst_id: str,
+        cl_ord_id: str,
+        *,
+        timeout_sec: float = 10.0,
+        poll_interval_sec: float = 1.0,
+    ) -> dict[str, Any]:
+        """Poll until the order is filled, partially filled, or cancelled.
+        Raises OkxApiError on timeout or unexpected state."""
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            order = self.get_order(inst_id, cl_ord_id)
+            if order is None:
+                self.logger.warning("Order %s not found (may have been cancelled)", cl_ord_id)
+                raise OkxApiError(f"Order {cl_ord_id} not found")
+            state = order.get("state", "")
+            if state == "filled":
+                return order
+            if state in ("live", "partially_filled"):
+                time.sleep(poll_interval_sec)
+                continue
+            # Cancelled or other terminal state.
+            raise OkxApiError(f"Order {cl_ord_id} reached terminal state {state}")
+        raise OkxApiError(f"Order {cl_ord_id} did not fill within {timeout_sec}s timeout")

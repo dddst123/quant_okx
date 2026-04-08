@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, codex/**]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-type:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check okx_quant/ tests/
+
+      - name: Type check with mypy
+        run: mypy okx_quant/
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --cov=okx_quant --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: success()
+        with:
+          fail_ci_if_error: false

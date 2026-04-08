@@ -149,7 +149,7 @@ class FactorWalkForwardAnalyzer:
                 },
             )
         else:
-            enabled_variants = (
+            enabled_variants = (  # type: ignore[assignment]
                 {
                     "factor_dynamic_top_n_enabled": True,
                     "factor_dynamic_top_n": 2,
@@ -232,7 +232,7 @@ class FactorWalkForwardAnalyzer:
             (Decimal("0.22"), Decimal("0.35")),
             (Decimal("0.30"), Decimal("0.15")),
         )
-        rebalance_modes = ("weekly", "monthly")
+        rebalance_modes: tuple[str, ...] = ("weekly", "monthly")
         rebalance_interval_sec = self.settings.factor_rebalance_interval_sec
         if bar_seconds(self.settings.factor_bar) < 24 * 60 * 60:
             rebalance_modes = ("interval",)
@@ -432,6 +432,9 @@ class FactorWalkForwardAnalyzer:
                     factor_min_24h_quote_volume=Decimal("0"),
                     **params,
                 )
+                if not candidate_settings.try_validate():
+                    self.logger.warning("Skipping invalid param set: %s", self._serialize_params(params))
+                    continue
                 candidate_backtester = FactorBacktester(candidate_settings)
                 train_report, train_curve, _ = candidate_backtester.simulate_range(
                     history,

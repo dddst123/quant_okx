@@ -195,6 +195,7 @@ class FactorGuardian:
 
     def serve(self, max_iterations: int | None = None) -> None:
         iteration = 0
+        error_sleep = self.settings.factor_rebalance_interval_sec
         while max_iterations is None or iteration < max_iterations:
             try:
                 snapshot = self.run_once()
@@ -206,12 +207,14 @@ class FactorGuardian:
                     snapshot.trading_halted,
                     sorted(snapshot.holdings),
                 )
+                error_sleep = self.settings.factor_rebalance_interval_sec
             except Exception:
                 self.logger.exception("Guardian loop failed")
+                error_sleep = min(error_sleep * 2, 1800)
             iteration += 1
             if max_iterations is not None and iteration >= max_iterations:
                 break
-            time.sleep(self.settings.factor_rebalance_interval_sec)
+            time.sleep(error_sleep)
 
     def serve_forever(self) -> None:
         self.serve()

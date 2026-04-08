@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, ROUND_DOWN
-from typing import Any, Callable, TypeVar
+from decimal import ROUND_DOWN, Decimal
+from typing import Any, TypeVar
 
 from okx_quant.alerts import AlertManager
 from okx_quant.client import OkxRestClient
 from okx_quant.config import Settings
 from okx_quant.market_state import MarketStateEngine, MarketStateSnapshot
 from okx_quant.models import InstrumentRules, SpotTicker
-from okx_quant.portfolio_risk import PortfolioRiskEngine, PortfolioStateStore
+from okx_quant.portfolio_risk import PortfolioRiskEngine, PortfolioRiskState, PortfolioStateStore
 from okx_quant.strategy import FactorCandidate, VolumeTrendFactorStrategy
 from okx_quant.timeframe import bar_seconds
 from okx_quant.universe import discover_factor_universe
@@ -163,18 +164,8 @@ class FactorPortfolioBot:
                 holdings[inst_id] = balance
         return holdings
 
-    def _rebalance_due(self, state, now: datetime) -> bool:
-        if not state.last_rebalance_at:
-            return True
-        last = datetime.fromisoformat(state.last_rebalance_at)
-        mode = self.settings.factor_rebalance_mode
-        if mode == "interval":
-            return (now - last).total_seconds() >= self.settings.factor_rebalance_interval_sec
-        if mode == "daily":
-            return last.date() != now.date()
-        if mode == "weekly":
-            return now.weekday() == self.settings.factor_rebalance_weekday and now.isocalendar()[:2] != last.isocalendar()[:2]
-        return (now.year, now.month) != (last.year, last.month)
+    def _rebalance_due(self, state: PortfolioRiskState, now: datetime) -> bool:
+        return self.settings.rebalance_due(state.last_rebalance_at, now)
 
     def _portfolio_equity(self, balances: dict[str, Decimal], ticker_map: dict[str, SpotTicker]) -> tuple[dict[str, Decimal], Decimal]:
         holdings = self._spot_holdings(balances, ticker_map)
@@ -265,6 +256,8 @@ class FactorPortfolioBot:
                 if base_size < rules.min_size or est_quote_value < self.settings.factor_min_order_quote:
                     continue
                 candidate = candidate_by_id.get(inst_id)
+                if candidate is None:
+                    continue
                 reason = f"buy to target {inst_id} weight={candidate.weight:.2%} score={candidate.score:.4f}"
                 planned.append(
                     PlannedOrder(
@@ -347,10 +340,15 @@ class FactorPortfolioBot:
             )
             if resumed:
                 self.alerts.send("Drawdown Resume", "Cooldown elapsed and benchmark trend recovered; trading resumed")
-        forced_sells = {
-            decision.inst_id: decision.reason
-            for decision in self.risk_engine.stop_decisions(state, holdings, price_map)
-        }
+        stop_decisions = self.risk_engine.stop_decisions(state, holdings, price_map)
+        forced_sells = {d.inst_id: d.reason for d in stop_decisions}
+        # Reset high-water mark for trailing-stop positions so the next bar uses the
+        # current price as baseline.
+        stopped_ids: set[str] = set()
+        for d in stop_decisions:
+            stopped_ids |= d.stopped_position_ids
+        if stopped_ids:
+            state = self.risk_engine.reset_trailing_stops(state, stopped_ids, price_map)
         if drawdown_triggered and state.trading_halted:
             self.alerts.send("Drawdown Halt", state.halt_reason or "Max drawdown exceeded")
         for inst_id, reason in forced_sells.items():
@@ -393,9 +391,16 @@ class FactorPortfolioBot:
                 continue
 
             result = self.client.place_market_order(order.inst_id, order.side, order.size, order.target_currency)
-            executed_orders.append(result)
-            executed_plans.append(order)
             self.logger.info("Order sent %s %s: %s", order.side, order.inst_id, result)
+            # Wait for the order to fill before proceeding to the next.
+            try:
+                fill_result = self.client.wait_for_fill(order.inst_id, result.get("clOrdId", ""), timeout_sec=15)
+                executed_orders.append(fill_result)
+                self.logger.info("Order filled %s %s: %s", order.side, order.inst_id, fill_result)
+            except Exception as exc:
+                self.logger.warning("Order fill wait failed for %s %s: %s", order.side, order.inst_id, exc)
+                executed_orders.append(result)
+            executed_plans.append(order)
 
         if rebalance_due:
             state = self.risk_engine.mark_rebalance(state, now)
@@ -430,6 +435,8 @@ class FactorPortfolioBot:
         sleep_seconds = self.settings.factor_rebalance_interval_sec
         if self.settings.factor_rebalance_mode != "interval":
             sleep_seconds = min(self.settings.factor_rebalance_interval_sec, bar_seconds(self.settings.factor_bar))
+            base_sleep = sleep_seconds
+            error_sleep = base_sleep
         while True:
             try:
                 snapshot = self.run_once()
@@ -444,12 +451,17 @@ class FactorPortfolioBot:
                     len(snapshot.planned_orders),
                     snapshot.market_state.reason if snapshot.market_state is not None else "n/a",
                 )
+                error_sleep = base_sleep
             except Exception as exc:
                 state = self.risk_engine.record_error(self.state_store.load())
                 self.state_store.save(state)
                 self.logger.exception("Factor trading loop failed")
                 if state.consecutive_errors == 1 or state.consecutive_errors % self.settings.alert_error_every_n == 0:
                     self.alerts.send("Factor Bot Error", f"consecutive_errors={state.consecutive_errors} error={exc}")
+                # Exponential backoff capped at 30 minutes.
+                error_sleep = min(error_sleep * 2, 1800)
+                time.sleep(error_sleep)
+                continue
             time.sleep(sleep_seconds)
 
     def reset_risk_state(self) -> None:
