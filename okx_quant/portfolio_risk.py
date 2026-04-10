@@ -15,6 +15,7 @@ from okx_quant.config import Settings
 class PositionState:
     cost_basis: Decimal  # volume-weighted average entry price
     high_water_price: Decimal
+    size: Decimal | None = None
 
 
 @dataclass
@@ -45,8 +46,16 @@ class PortfolioStateStore:
         data = json.loads(self.path.read_text(encoding="utf-8"))
         positions = {
             inst_id: PositionState(
-                cost_basis=Decimal(item["cost_basis"]),
-                high_water_price=Decimal(item["high_water_price"]),
+                # Support both old (entry_price) and new (cost_basis) field names for backward compat.
+                cost_basis=Decimal(
+                    item.get("cost_basis") or item.get("entry_price", "0")
+                ),
+                high_water_price=Decimal(item.get("high_water_price", "0")),
+                size=(
+                    Decimal(str(item["size"]))
+                    if item.get("size") not in (None, "")
+                    else None
+                ),
             )
             for inst_id, item in data.get("positions", {}).items()
         }
@@ -73,6 +82,7 @@ class PortfolioStateStore:
                 inst_id: {
                     "cost_basis": str(item.cost_basis),
                     "high_water_price": str(item.high_water_price),
+                    "size": None if item.size is None else str(item.size),
                 }
                 for inst_id, item in state.positions.items()
             },
@@ -128,14 +138,67 @@ class PortfolioRiskEngine:
             existing = state.positions.get(inst_id)
             if existing is None:
                 # New position: record current price as both cost basis and high-water mark.
-                positions[inst_id] = PositionState(cost_basis=price, high_water_price=price)
+                positions[inst_id] = PositionState(cost_basis=price, high_water_price=price, size=size)
             else:
+                cost_basis = existing.cost_basis
+                if existing.size is not None and size > existing.size:
+                    added_size = size - existing.size
+                    weighted_cost = (existing.cost_basis * existing.size) + (price * added_size)
+                    cost_basis = weighted_cost / size
                 # Existing position: high-water mark advances. Cost basis stays
-                # unchanged (it represents the volume-weighted average entry price).
+                # unchanged unless a larger position appears without confirmed fills,
+                # in which case we approximate the added size at the current price.
                 positions[inst_id] = PositionState(
-                    cost_basis=existing.cost_basis,
+                    cost_basis=cost_basis,
                     high_water_price=max(existing.high_water_price, price),
+                    size=size,
                 )
+        return PortfolioRiskState(
+            equity_peak=state.equity_peak,
+            trading_halted=state.trading_halted,
+            halt_reason=state.halt_reason,
+            halted_at=state.halted_at,
+            last_rebalance_at=state.last_rebalance_at,
+            consecutive_errors=state.consecutive_errors,
+            positions=positions,
+        )
+
+    def apply_fill(
+        self,
+        state: PortfolioRiskState,
+        inst_id: str,
+        side: str,
+        size: Decimal,
+        price: Decimal,
+    ) -> PortfolioRiskState:
+        if size <= 0 or price <= 0:
+            return state
+
+        positions = dict(state.positions)
+        existing = positions.get(inst_id)
+        if side == "buy":
+            if existing is None or existing.size is None or existing.size <= 0:
+                positions[inst_id] = PositionState(cost_basis=price, high_water_price=price, size=size)
+            else:
+                new_size = existing.size + size
+                weighted_cost = (existing.cost_basis * existing.size) + (price * size)
+                positions[inst_id] = PositionState(
+                    cost_basis=weighted_cost / new_size,
+                    high_water_price=max(existing.high_water_price, price),
+                    size=new_size,
+                )
+        elif existing is not None:
+            if existing.size is not None:
+                remaining_size = existing.size - size
+                if remaining_size <= 0:
+                    positions.pop(inst_id, None)
+                else:
+                    positions[inst_id] = PositionState(
+                        cost_basis=existing.cost_basis,
+                        high_water_price=max(existing.high_water_price, price),
+                        size=remaining_size,
+                    )
+
         return PortfolioRiskState(
             equity_peak=state.equity_peak,
             trading_halted=state.trading_halted,
@@ -299,6 +362,7 @@ class PortfolioRiskEngine:
                 positions[inst_id] = PositionState(
                     cost_basis=positions[inst_id].cost_basis,
                     high_water_price=current_price,
+                    size=positions[inst_id].size,
                 )
                 self.logger.debug("Reset trailing stop for %s: high_water -> %s", inst_id, current_price)
         return PortfolioRiskState(
@@ -310,4 +374,3 @@ class PortfolioRiskEngine:
             consecutive_errors=state.consecutive_errors,
             positions=positions,
         )
-

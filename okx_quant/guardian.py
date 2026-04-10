@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from okx_quant.alerts import AlertManager
 from okx_quant.config import Settings
@@ -38,19 +39,29 @@ class GuardianStateStore:
 
     def save(self, state: GuardianState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(
-                {
-                    "initial_equity_quote": str(state.initial_equity_quote),
-                    "last_daily_summary_date": state.last_daily_summary_date,
-                    "last_trading_halted": state.last_trading_halted,
-                    "last_halt_reason": state.last_halt_reason,
-                },
-                indent=2,
-                ensure_ascii=True,
-            ),
-            encoding="utf-8",
-        )
+        payload = {
+            "initial_equity_quote": str(state.initial_equity_quote),
+            "last_daily_summary_date": state.last_daily_summary_date,
+            "last_trading_halted": state.last_trading_halted,
+            "last_halt_reason": state.last_halt_reason,
+        }
+        tmp_path: str | None = None
+        try:
+            with NamedTemporaryFile(
+                mode="w",
+                dir=self.path.parent,
+                prefix=".tmp_",
+                suffix=".json",
+                encoding="utf-8",
+                delete=False,
+            ) as tmp:
+                tmp_path = tmp.name
+                json.dump(payload, tmp, indent=2, ensure_ascii=True)
+            Path(tmp_path).replace(self.path)
+        except BaseException:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+            raise
 
 
 class FactorGuardian:

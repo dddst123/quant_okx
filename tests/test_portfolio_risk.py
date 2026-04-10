@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -62,12 +63,39 @@ class PortfolioRiskEngineTest(unittest.TestCase):
             store = PortfolioStateStore(f"{tmpdir}/state.json")
             state = PortfolioRiskState(
                 equity_peak=Decimal("123"),
-                positions={"ETH-USDT": PositionState(cost_basis=Decimal("10"), high_water_price=Decimal("12"))},
+                positions={
+                    "ETH-USDT": PositionState(
+                        cost_basis=Decimal("10"),
+                        high_water_price=Decimal("12"),
+                        size=Decimal("2"),
+                    )
+                },
             )
             store.save(state)
             loaded = store.load()
             self.assertEqual(loaded.equity_peak, Decimal("123"))
             self.assertIn("ETH-USDT", loaded.positions)
+            self.assertEqual(loaded.positions["ETH-USDT"].size, Decimal("2"))
+
+    def test_state_store_loads_legacy_position_without_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = f"{tmpdir}/state.json"
+            with open(state_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "equity_peak": "123",
+                        "positions": {
+                            "ETH-USDT": {
+                                "entry_price": "10",
+                                "high_water_price": "12",
+                            }
+                        },
+                    },
+                    handle,
+                )
+            loaded = PortfolioStateStore(state_path).load()
+            self.assertEqual(loaded.positions["ETH-USDT"].cost_basis, Decimal("10"))
+            self.assertIsNone(loaded.positions["ETH-USDT"].size)
 
     def test_halt_can_resume_after_cooldown_when_benchmark_recovers(self) -> None:
         settings = Settings(
@@ -100,6 +128,29 @@ class PortfolioRiskEngineTest(unittest.TestCase):
         self.assertEqual(engine.exposure_multiplier(Decimal("0.05")), Decimal("1"))
         self.assertEqual(engine.exposure_multiplier(Decimal("0.12")), Decimal("0.8"))
         self.assertEqual(engine.exposure_multiplier(Decimal("0.25")), Decimal("0.5"))
+
+    def test_apply_fill_updates_weighted_cost_basis_after_add(self) -> None:
+        engine = PortfolioRiskEngine(Settings())
+        state = PortfolioRiskState(
+            positions={
+                "BTC-USDT": PositionState(
+                    cost_basis=Decimal("100"),
+                    high_water_price=Decimal("110"),
+                    size=Decimal("1"),
+                )
+            }
+        )
+
+        updated = engine.apply_fill(
+            state,
+            "BTC-USDT",
+            "buy",
+            Decimal("1"),
+            Decimal("120"),
+        )
+
+        self.assertEqual(updated.positions["BTC-USDT"].size, Decimal("2"))
+        self.assertEqual(updated.positions["BTC-USDT"].cost_basis, Decimal("110"))
 
 
 class FactorBacktesterTest(unittest.TestCase):

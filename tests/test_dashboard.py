@@ -174,6 +174,7 @@ class DashboardDataStoreTest(unittest.TestCase):
             self.assertEqual(len(snapshot["recent_rebalances"]), 2)
             self.assertEqual(snapshot["recent_rebalances"][0]["status"], "filled")
             self.assertEqual(snapshot["recent_rebalances"][0]["orders"][0]["inst_id"], "BTC-USDT")
+            self.assertEqual(snapshot["recent_rebalances"][0]["orders"][0]["status"], "filled")
             self.assertEqual(snapshot["recent_rebalances"][0]["orders"][0]["event_kind"], "stop-loss")
             self.assertEqual(snapshot["latest_rebalance"]["ts"], "2026-04-07T08:00:00+00:00")
             self.assertEqual(snapshot["latest_highlight"]["category"], "circuit-breaker")

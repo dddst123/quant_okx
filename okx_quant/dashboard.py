@@ -196,13 +196,13 @@ class DashboardDataStore:
 
     def _recent_rebalances(self, ticks: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for index in range(len(ticks) - 1, -1, -1):
-            item = ticks[index]
+        for tick_idx in range(len(ticks) - 1, -1, -1):
+            item = ticks[tick_idx]
             planned = item.get("planned_orders") or []
             executed = item.get("executed_orders") or []
             if not planned and not executed:
                 continue
-            holdings_delta = self._holding_delta(ticks[index - 1] if index > 0 else None, item)
+            holdings_delta = self._holding_delta(ticks[tick_idx - 1] if tick_idx > 0 else None, item)
 
             if planned:
                 total_planned_quote = sum(_safe_float(order.get("est_quote_value")) for order in planned)
@@ -212,10 +212,10 @@ class DashboardDataStore:
                         "side": order.get("side", ""),
                         "reason": order.get("reason", ""),
                         "est_quote_value": _safe_float(order.get("est_quote_value")),
-                        "status": "filled" if index < len(executed) else "planned",
+                        "status": "filled" if order_idx < len(executed) else "planned",
                         "event_kind": "stop-loss" if _is_stop_reason(order.get("reason")) else "order",
                     }
-                    for index, order in enumerate(planned)
+                    for order_idx, order in enumerate(planned)
                 ]
                 status = "filled" if executed and len(executed) >= len(planned) else "partial" if executed else "planned"
             else:

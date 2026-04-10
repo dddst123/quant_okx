@@ -8,8 +8,10 @@ from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, TypeVar
 
+import requests  # type: ignore[import-untyped]
+
 from okx_quant.alerts import AlertManager
-from okx_quant.client import OkxRestClient
+from okx_quant.client import OkxApiError, OkxRestClient
 from okx_quant.config import Settings
 from okx_quant.market_state import MarketStateEngine, MarketStateSnapshot
 from okx_quant.models import InstrumentRules, SpotTicker
@@ -69,10 +71,20 @@ class FactorPortfolioBot:
         for attempt in range(self.settings.http_max_retries):
             try:
                 return action()
-            except Exception:
+            except OkxApiError:
+                # Business/logic errors (e.g., insufficient balance, market suspended) are
+                # not transient — do not retry, propagate immediately.
+                raise
+            except requests.RequestException:
                 if attempt == self.settings.http_max_retries - 1:
                     raise
-                self.logger.warning("Retrying %s after failure (%s/%s)", label, attempt + 1, self.settings.http_max_retries)
+                self.logger.warning("Retrying %s after network failure (%s/%s)", label, attempt + 1, self.settings.http_max_retries)
+                time.sleep(self.settings.http_retry_backoff_sec * (2**attempt))
+            except Exception:
+                # Unexpected errors (TypeError, ValueError, etc.) — also retry once.
+                if attempt == self.settings.http_max_retries - 1:
+                    raise
+                self.logger.warning("Retrying %s after unexpected error (%s/%s)", label, attempt + 1, self.settings.http_max_retries)
                 time.sleep(self.settings.http_retry_backoff_sec * (2**attempt))
         raise RuntimeError("Unreachable retry loop")
 
@@ -106,6 +118,24 @@ class FactorPortfolioBot:
             ),
             f"candles for {inst_id}",
         )
+
+    def _filled_price(
+        self,
+        order: PlannedOrder,
+        fill_result: dict[str, Any],
+        ticker_map: dict[str, SpotTicker],
+    ) -> Decimal:
+        for key in ("avgPx", "fillPx", "px"):
+            raw_value = fill_result.get(key)
+            if raw_value in (None, ""):
+                continue
+            try:
+                price = Decimal(str(raw_value))
+            except Exception:
+                continue
+            if price > 0:
+                return price
+        return ticker_map[order.inst_id].last
 
     def _fetch_market_data(self, inst_ids: list[str]) -> dict[str, list]:
         market_data = {}
@@ -289,25 +319,6 @@ class FactorPortfolioBot:
         planned.sort(key=lambda order: 0 if order.side == "sell" else 1)
         return total_equity_quote, available_quote, planned
 
-    def _apply_execution_to_state(
-        self,
-        balances: dict[str, Decimal],
-        ticker_map: dict[str, SpotTicker],
-        executed_orders: list[PlannedOrder],
-    ) -> dict[str, Decimal]:
-        updated = dict(balances)
-        quote = self.settings.factor_quote_currency
-        for order in executed_orders:
-            base = order.inst_id.split("-", 1)[0]
-            price = ticker_map[order.inst_id].last
-            if order.side == "sell":
-                updated[base] = max(Decimal("0"), updated.get(base, Decimal("0")) - order.size)
-                updated[quote] = updated.get(quote, Decimal("0")) + order.size * price
-            else:
-                updated[base] = updated.get(base, Decimal("0")) + order.size
-                updated[quote] = max(Decimal("0"), updated.get(quote, Decimal("0")) - order.size * price)
-        return updated
-
     def run_once(self) -> FactorRunSnapshot:
         self.settings.require_private_api()
         now = datetime.now(UTC)
@@ -366,7 +377,7 @@ class FactorPortfolioBot:
         risk_budget_multiplier = Decimal("0") if state.trading_halted else self.risk_engine.exposure_multiplier(
             Decimal("0") if resumed else drawdown
         )
-        total_equity_quote, available_quote, planned_orders = self._build_orders(
+        _, _, planned_orders = self._build_orders(
             picks,
             balances,
             ticker_map,
@@ -378,7 +389,8 @@ class FactorPortfolioBot:
         )
 
         executed_orders: list[dict[str, Any]] = []
-        executed_plans: list[PlannedOrder] = []
+        live_orders_submitted = False
+        fill_tracking_failed = False
         for order in planned_orders:
             if self.settings.dry_run:
                 self.logger.info(
@@ -390,23 +402,36 @@ class FactorPortfolioBot:
                 )
                 continue
 
+            live_orders_submitted = True
             result = self.client.place_market_order(order.inst_id, order.side, order.size, order.target_currency)
             self.logger.info("Order sent %s %s: %s", order.side, order.inst_id, result)
             # Wait for the order to fill before proceeding to the next.
             try:
                 fill_result = self.client.wait_for_fill(order.inst_id, result.get("clOrdId", ""), timeout_sec=15)
                 executed_orders.append(fill_result)
+                state = self.risk_engine.apply_fill(
+                    state,
+                    order.inst_id,
+                    order.side,
+                    order.size,
+                    self._filled_price(order, fill_result, ticker_map),
+                )
                 self.logger.info("Order filled %s %s: %s", order.side, order.inst_id, fill_result)
             except Exception as exc:
+                fill_tracking_failed = True
                 self.logger.warning("Order fill wait failed for %s %s: %s", order.side, order.inst_id, exc)
-                executed_orders.append(result)
-            executed_plans.append(order)
 
-        if rebalance_due:
+        if rebalance_due and not fill_tracking_failed:
             state = self.risk_engine.mark_rebalance(state, now)
+        elif rebalance_due and fill_tracking_failed:
+            self.logger.warning("Rebalance confirmation incomplete; leaving rebalance pending for the next cycle")
 
-        effective_balances = self._apply_execution_to_state(balances, ticker_map, executed_plans) if executed_plans else balances
-        effective_holdings = self._spot_holdings(effective_balances, ticker_map)
+        if live_orders_submitted:
+            effective_balances = self._with_retry(self.client.get_all_balances, "account balances refresh")
+        else:
+            effective_balances = balances
+        effective_holdings, effective_total_equity_quote = self._portfolio_equity(effective_balances, ticker_map)
+        effective_available_quote = effective_balances.get(self.settings.factor_quote_currency, Decimal("0"))
         effective_holdings_quote = {
             inst_id: size * ticker_map[inst_id].last
             for inst_id, size in effective_holdings.items()
@@ -415,12 +440,17 @@ class FactorPortfolioBot:
         state = self.risk_engine.sync_positions(state, effective_holdings, price_map)
         state = self.risk_engine.clear_errors(state)
         self.state_store.save(state)
+        effective_drawdown = (
+            Decimal("0")
+            if state.equity_peak <= 0
+            else max(Decimal("0"), (state.equity_peak - effective_total_equity_quote) / state.equity_peak)
+        )
 
         return FactorRunSnapshot(
             ts=now,
-            total_equity_quote=total_equity_quote,
-            available_quote=available_quote,
-            drawdown=drawdown,
+            total_equity_quote=effective_total_equity_quote,
+            available_quote=effective_available_quote,
+            drawdown=effective_drawdown,
             trading_halted=state.trading_halted,
             halt_reason=state.halt_reason,
             holdings=effective_holdings,
@@ -432,11 +462,11 @@ class FactorPortfolioBot:
         )
 
     def serve_forever(self) -> None:
-        sleep_seconds = self.settings.factor_rebalance_interval_sec
+        base_sleep = self.settings.factor_rebalance_interval_sec
         if self.settings.factor_rebalance_mode != "interval":
-            sleep_seconds = min(self.settings.factor_rebalance_interval_sec, bar_seconds(self.settings.factor_bar))
-            base_sleep = sleep_seconds
-            error_sleep = base_sleep
+            base_sleep = min(self.settings.factor_rebalance_interval_sec, bar_seconds(self.settings.factor_bar))
+        sleep_seconds = base_sleep
+        error_sleep = base_sleep
         while True:
             try:
                 snapshot = self.run_once()

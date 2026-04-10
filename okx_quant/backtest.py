@@ -363,6 +363,7 @@ class FactorBacktester:
                 if exec_price is None or current_size <= 0:
                     continue
                 if risk_state.trading_halted and self.settings.factor_liquidate_on_halt:
+                    size_before = holdings.get(inst_id, Decimal("0"))
                     cash = self._execute_sell(
                         trades,
                         holdings,
@@ -373,10 +374,14 @@ class FactorBacktester:
                         exec_price,
                         risk_state.halt_reason or "drawdown halt",
                     )
-                    turnover_notional += current_size * exec_price
+                    sold_size = size_before - holdings.get(inst_id, Decimal("0"))
+                    if sold_size > 0:
+                        risk_state = self.risk_engine.apply_fill(risk_state, inst_id, "sell", sold_size, exec_price)
+                        turnover_notional += sold_size * exec_price
                     continue
                 stop_decision = stop_map.get(inst_id)
                 if stop_decision is not None:
+                    size_before = holdings.get(inst_id, Decimal("0"))
                     cash = self._execute_sell(
                         trades,
                         holdings,
@@ -387,7 +392,10 @@ class FactorBacktester:
                         exec_price,
                         stop_decision.reason,
                     )
-                    turnover_notional += current_size * exec_price
+                    sold_size = size_before - holdings.get(inst_id, Decimal("0"))
+                    if sold_size > 0:
+                        risk_state = self.risk_engine.apply_fill(risk_state, inst_id, "sell", sold_size, exec_price)
+                        turnover_notional += sold_size * exec_price
 
             if rebalance_due and not risk_state.trading_halted:
                 for inst_id in sorted(set(target_notional) | set(holdings)):
@@ -401,6 +409,7 @@ class FactorBacktester:
                         continue
                     current_size = holdings.get(inst_id, Decimal("0"))
                     if scaled_gap < 0:
+                        size_before = current_size
                         sell_size = min(current_size, abs(scaled_gap) / exec_price)
                         cash = self._execute_sell(
                             trades,
@@ -412,7 +421,10 @@ class FactorBacktester:
                             exec_price,
                             "rebalance down to target",
                         )
-                        turnover_notional += sell_size * exec_price
+                        sold_size = size_before - holdings.get(inst_id, Decimal("0"))
+                        if sold_size > 0:
+                            risk_state = self.risk_engine.apply_fill(risk_state, inst_id, "sell", sold_size, exec_price)
+                            turnover_notional += sold_size * exec_price
 
                 candidate_by_id = {pick.inst_id: pick for pick in last_picks}
                 for inst_id in sorted(target_notional):
@@ -433,6 +445,7 @@ class FactorBacktester:
                     size = spend / exec_price
                     candidate = candidate_by_id[inst_id]
                     cash_before = cash
+                    size_before = holdings.get(inst_id, Decimal("0"))
                     cash = self._execute_buy(
                         trades,
                         holdings,
@@ -443,7 +456,10 @@ class FactorBacktester:
                         exec_price,
                         f"target weight {candidate.weight:.2%} score={candidate.score:.4f}",
                     )
-                    turnover_notional += max(cash_before - cash, Decimal("0"))
+                    bought_size = holdings.get(inst_id, Decimal("0")) - size_before
+                    if bought_size > 0:
+                        risk_state = self.risk_engine.apply_fill(risk_state, inst_id, "buy", bought_size, exec_price)
+                        turnover_notional += max(cash_before - cash, Decimal("0"))
                 last_rebalance_ts = current_ts
 
             risk_state = self.risk_engine.sync_positions(risk_state, holdings, current_close_prices)
